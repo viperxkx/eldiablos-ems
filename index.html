@@ -1865,6 +1865,18 @@ function nextCloseoutDate(){
 
 async function runPayrollCloseout(triggeredBy){
   const weekLabel=new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  // ── Snapshot weekly hours BEFORE reset ──
+  const reportSnap=employees.filter(e=>e.status==='active').map(e=>({
+    cs:e.cs,name:e.name,rank:e.rank,dept:e.dept,type:e.type,
+    weekHrs:e.weekHrs||0,totalHrs:e.totalHrs||0,
+    required:e.type==='fulltime'?10:e.type==='parttime'?5:0,
+    met:(e.weekHrs||0)>=(e.type==='fulltime'?10:e.type==='parttime'?5:0)||e.type==='salary'
+  }));
+  payroll.weeklyReports=payroll.weeklyReports||[];
+  payroll.weeklyReports.unshift({
+    id:uid(),date:new Date().toISOString(),weekLabel,triggeredBy,snapshot:reportSnap
+  });
+  if(payroll.weeklyReports.length>12)payroll.weeklyReports=payroll.weeklyReports.slice(0,12);
   employees.forEach(emp=>{
     if(!emp.timecards)return;
     emp.timecards.forEach(tc=>{if(tc.status==='pending'){tc.status='expired';tc.expiredAt=new Date().toISOString();}});
@@ -2927,7 +2939,8 @@ function renderPayTab(emp,isSelf){
   </div>
   <div class="two-col" style="margin-bottom:11px">
     <div class="ibox" style="border-color:rgba(34,197,94,.3);background:rgba(34,197,94,.05)">
-      <div class="iblbl" style="color:var(--G)">⏱ Hours This Week</div>
+      <div class="iblbl" style="color:var(--G);display:flex;align-items:center;justify-content:space-between">⏱ Hours This Week${isHR()||isHighCmd()||isChief()?`<span onclick="openEditWeekHrs('${emp.cs}')" style="font-family:var(--fm);font-size:9px;color:var(--M);cursor:pointer;text-decoration:underline">edit</span>`:''}
+      </div>
       <div style="font-family:var(--display);font-size:22px;color:var(--G)">${emp.weekHrs||0}h</div>
       <div style="font-family:var(--fm);font-size:9px;color:var(--D);margin-top:3px">Resets automatically Friday 11:59 PM</div>
     </div>
@@ -2953,6 +2966,76 @@ function renderPayTab(emp,isSelf){
     <div><div style="font-family:var(--fm);font-size:11px">Week of ${t.week}</div><div style="font-family:var(--fm);font-size:10px;color:var(--M)">${t.hoursWorked}h · ${fm(t.totalPay||0)}${t.manualPayout?' · <span style="color:var(--P)">HR Payout</span>':''}</div></div>
     <span class="pill ${t.status==='approved'?'pg':t.status==='pending'?'pylw':'predd'}">${t.status}</span>
   </div>`).join(''):'<div class="empty"><div class="empty-s">No timecards on file.</div></div>'}`;
+}
+function openEditWeekHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  openModal('EDIT WEEK HOURS — '+emp.name,'sm',`
+    <div class="abanner" style="margin-bottom:12px">
+      Correct <strong>${emp.name}</strong>'s logged hours for the current pay period.<br>
+      <span style="font-size:11px;color:var(--M)">Current: ${emp.weekHrs||0}h · Required: ${emp.type==='fulltime'?'10h (FT)':emp.type==='parttime'?'5h (PT)':'N/A (Salary)'}</span>
+    </div>
+    <div class="fg"><label class="lbl">Corrected Hours This Week</label>
+    <input class="mfi" type="number" id="ewh-hrs" value="${emp.weekHrs||0}" min="0" step="0.5" placeholder="0"/></div>
+    <div class="fg" style="margin-top:8px"><label class="lbl">Reason</label>
+    <input class="mfi" id="ewh-note" placeholder="e.g. Missing clock-in, system error..."/></div>`,
+  `<button class="btn bg2" onclick="closeModal()">Cancel</button>
+   <button class="btn bp" onclick="saveEditWeekHrs('${cs}')">Save</button>`);
+}
+async function saveEditWeekHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  const newHrs=parseFloat(document.getElementById('ewh-hrs')?.value);
+  const note=(document.getElementById('ewh-note')?.value||'').trim()||'Manual correction';
+  if(isNaN(newHrs)||newHrs<0){showToast('Invalid hours',true);return;}
+  const old=emp.weekHrs||0;
+  emp.weekHrs=newHrs;
+  emp.totalHrs=(emp.totalHrs||0)+(newHrs-old);
+  await saveE();
+  await logAction('Week Hours Edited',`${emp.name} (${cs}) week hrs: ${old}h → ${newHrs}h — ${note}`,cs);
+  closeModal();
+  showToast(`✅ ${emp.name} week hours updated to ${newHrs}h`);
+  switchPage(currentPage);
+}
+function renderWeeklyReports(){
+  const reports=(payroll.weeklyReports||[]);
+  if(!reports.length)return `<div class="empty"><div class="empty-s">No weekly reports yet. Reports are generated automatically at each payroll closeout.</div></div>`;
+  return reports.map(r=>{
+    const snap=r.snapshot||[];
+    const total=snap.length;
+    const met=snap.filter(e=>e.met).length;
+    const missed=snap.filter(e=>!e.met);
+    return `<div class="panel" style="margin-bottom:10px">
+      <div class="phdr" style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-family:var(--display);font-size:16px;letter-spacing:1px">Week Ending ${r.weekLabel}</div>
+          <div style="font-family:var(--fm);font-size:9px;color:var(--M);margin-top:2px">${new Date(r.date).toLocaleString()} · ${r.triggeredBy==='auto'?'Auto-closeout':'Manual: '+r.triggeredBy}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-family:var(--display);font-size:20px;color:var(--G)">${met}/${total}</div>
+          <div style="font-family:var(--fm);font-size:9px;color:var(--M)">hours met</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto;margin-top:8px">
+        <table class="rtbl" style="width:100%">
+          <thead><tr>
+            <th>Employee</th><th>Rank</th><th>Type</th><th>Required</th><th>Logged</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            ${snap.sort((a,b)=>b.weekHrs-a.weekHrs).map(e=>`<tr>
+              <td><span style="font-family:var(--fm);font-size:10px;color:var(--M)">${e.cs}</span> ${e.name}</td>
+              <td>${e.rank}</td>
+              <td>${e.type==='fulltime'?'FT':e.type==='parttime'?'PT':'Salary'}</td>
+              <td>${e.type==='salary'?'—':e.required+'h'}</td>
+              <td style="font-family:var(--display);color:${e.weekHrs>=e.required||e.type==='salary'?'var(--G)':'var(--R)'}">${e.weekHrs}h</td>
+              <td><span class="pill ${e.met?'pg':'predd'}">${e.met?'MET':'MISSED'}</span></td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${missed.length?`<div style="margin-top:8px;padding:7px 10px;background:rgba(214,48,49,.07);border:1px solid rgba(214,48,49,.2);font-family:var(--fm);font-size:10px;color:var(--R)">
+        ⚠ Missed hours: ${missed.map(e=>e.name+' ('+e.weekHrs+'h)').join(', ')}
+      </div>`:''}
+    </div>`;
+  }).join('');
 }
 function liveCalc(cs){
   const emp=employees.find(e=>e.cs===cs);if(!emp)return;
@@ -3175,6 +3258,7 @@ function renderHRPortal(el){
     <div class="tab" data-ht="complaints" onclick="hrTab('complaints',this)">Complaints</div>
     <div class="tab" data-ht="import" onclick="hrTab('import',this)">Import / Hire</div>
     <div class="tab" data-ht="depts" onclick="hrTab('depts',this)">Departments</div>
+    <div class="tab" data-ht="weekreports" onclick="hrTab('weekreports',this)">📊 Weekly Reports</div>
   </div>
   <div id="hr-con"></div>`;
   hrTab('dash');
@@ -3189,6 +3273,7 @@ function hrTab(k,el){
   else if(k==='complaints')con.innerHTML=renderComplaints();
   else if(k==='import')con.innerHTML=renderImport();
   else if(k==='depts'){con.innerHTML=renderDepts();deptTab('depts');}
+  else if(k==='weekreports')con.innerHTML=renderWeeklyReports();
 }
 function renderHRDash(){
   const onProbation=employees.filter(e=>e.probationEnd&&new Date(e.probationEnd)>new Date());
@@ -4449,11 +4534,7 @@ function renderDashboard(el){
           <div class="iblbl">Career Hours</div>
           <div style="font-family:var(--display);font-size:22px;color:var(--Bl)">${emp.totalHrs||0}h</div>
         </div>
-        <div class="ibox">
-          <div class="iblbl">Pay Rate</div>
-          <div style="font-family:var(--display);font-size:18px;color:var(--G)">${fm(emp.hourlyRate)}/hr</div>
-          ${br.bonus?`<div style="font-family:var(--fm);font-size:10px;color:var(--M)">Bonus: ${fm(br.bonus)} · Cap: ${br.cap?fm(br.cap):'N/A'}</div>`:''}
-        </div>
+
       </div>
     </div>
   </div>
@@ -4930,7 +5011,7 @@ function openHireModal(prefillName=''){
         <input class="mfi" id="hr-cs" placeholder="Will auto-generate" style="font-family:var(--fm);font-weight:600;font-size:14px;letter-spacing:2px"/>
         <div style="font-family:var(--fm);font-size:9px;color:var(--D);margin-top:3px" id="hr-cs-hint">Format: <span id="hr-cs-pfx">I</span>-# (based on rank)</div>
       </div>
-      <div class="fg"><label class="lbl">Starting Hourly Rate</label><input class="mfi" type="number" id="hr-rate" value="12" min="0"/></div>
+
       <div class="fg"><label class="lbl">Region</label><input class="mfi" id="hr-reg" placeholder="e.g. Florida"/></div>
       <div class="fg"><label class="lbl">Timezone</label>
         <select class="mfi" id="hr-tz">
@@ -4957,7 +5038,7 @@ async function doHire(){
   const type=document.getElementById('hr-type')?.value||'parttime';
   const dept=document.getElementById('hr-dept')?.value||'Ambulance';
   const cs=document.getElementById('hr-cs')?.value.trim().toUpperCase()||nextCS(rank,employees);
-  const rate=parseFloat(document.getElementById('hr-rate')?.value)||12;
+  const rate=12; // hourly rate field removed
   const region=document.getElementById('hr-reg')?.value.trim()||'';
   const tz=document.getElementById('hr-tz')?.value||'EST';
   if(!name){showToast('Name required',true);return;}
@@ -5038,7 +5119,7 @@ function openEditEmpModal(cs){
           <option value="salary"${emp.type==='salary'?' selected':''}>Salary</option>
         </select>
       </div>
-      <div class="fg"><label class="lbl">Hourly Rate</label><input class="mfi" type="number" id="ee-rate" value="${emp.hourlyRate||0}"/></div>
+
       <div class="fg"><label class="lbl">Status</label>
         <select class="mfi" id="ee-status">
           <option${emp.status==='active'?' selected':''}>active</option>
@@ -5073,7 +5154,6 @@ async function saveEditEmp(cs){
   const newRank=document.getElementById('ee-rank')?.value||emp.rank;
   emp.dept=document.getElementById('ee-dept')?.value||emp.dept;
   emp.type=document.getElementById('ee-type')?.value||emp.type;
-  emp.hourlyRate=parseFloat(document.getElementById('ee-rate')?.value)||0;
   emp.status=document.getElementById('ee-status')?.value||emp.status;
   emp.rx=document.getElementById('ee-rx')?.value==='true';
   emp.taser=document.getElementById('ee-taser')?.value==='true';
