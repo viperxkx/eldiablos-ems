@@ -2938,7 +2938,12 @@ function renderPayTab(emp,isSelf){
       <div style="font-family:var(--fm);font-size:9px;color:var(--D);margin-top:3px">Resets automatically Friday 11:59 PM</div>
     </div>
     <div class="ibox">
-      <div class="iblbl">📋 Career Hours</div>
+      <div class="iblbl" style="display:flex;align-items:center;justify-content:space-between">📋 Career Hours
+        ${isHR()||isHighCmd()||isChief()?`<div style="display:flex;gap:5px">
+          <span onclick="openEditCareerHrs('${emp.cs}')" style="font-family:var(--fm);font-size:9px;color:var(--Bl);cursor:pointer;text-decoration:underline">edit</span>
+          <span onclick="confirmResetCareerHrs('${emp.cs}')" style="font-family:var(--fm);font-size:9px;color:var(--R);cursor:pointer;text-decoration:underline">reset</span>
+        </div>`:''}
+      </div>
       <div style="font-family:var(--display);font-size:22px;color:var(--T)">${emp.totalHrs||0}h</div>
       <div style="font-family:var(--fm);font-size:9px;color:var(--D);margin-top:3px">All-time total, never resets</div>
     </div>
@@ -3029,6 +3034,46 @@ function renderWeeklyReports(){
       </div>`:''}
     </div>`;
   }).join('');
+}
+function openEditCareerHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  openModal('EDIT CAREER HOURS — '+emp.name,'sm',`
+    <div class="abanner" style="margin-bottom:12px">Modify all-time career hours for <strong>${emp.name}</strong> (${cs})</div>
+    <div class="fg"><label class="lbl">Career Hours</label>
+    <input class="mfi" type="number" id="ech-hrs" value="${emp.totalHrs||0}" min="0" step="0.5"/></div>
+    <div class="fg" style="margin-top:8px"><label class="lbl">Reason</label>
+    <input class="mfi" id="ech-note" placeholder="e.g. Manual correction, data import..."/></div>`,
+  `<button class="btn bg2" onclick="closeModal()">Cancel</button>
+   <button class="btn bp" onclick="saveEditCareerHrs('${cs}')">Save</button>`);
+}
+async function saveEditCareerHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  const newHrs=parseFloat(document.getElementById('ech-hrs')?.value);
+  const note=document.getElementById('ech-note')?.value.trim()||'Manual correction';
+  if(isNaN(newHrs)||newHrs<0){showToast('Invalid hours',true);return;}
+  const old=emp.totalHrs||0;
+  emp.totalHrs=newHrs;
+  await saveE();
+  await logAction('Career Hours Edited',`${emp.name} (${cs}) career hours: ${old}h → ${newHrs}h — ${note}`,cs);
+  closeModal();showToast(`Career hours updated: ${emp.name} → ${newHrs}h`);
+  switchPage(currentPage);
+}
+function confirmResetCareerHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  openModal('RESET CAREER HOURS','sm',`
+    <div class="abanner" style="margin-bottom:12px">Reset <strong>${emp.name}</strong>'s career hours to <strong>0</strong>?<br>
+    <span style="font-size:11px;color:var(--M)">Current: ${emp.totalHrs||0}h — This cannot be undone.</span></div>`,
+  `<button class="btn bg2" onclick="closeModal()">Cancel</button>
+   <button class="btn predd" onclick="doResetCareerHrs('${cs}')">Reset to 0</button>`);
+}
+async function doResetCareerHrs(cs){
+  const emp=employees.find(e=>e.cs===cs);if(!emp)return;
+  const old=emp.totalHrs||0;
+  emp.totalHrs=0;emp.weekHrs=0;emp.timecards=[];
+  await saveE();
+  await logAction('Career Hours Reset',`${emp.name} (${cs}) career hours reset from ${old}h to 0`,cs);
+  closeModal();showToast(`${emp.name}'s career hours reset to 0`);
+  switchPage(currentPage);
 }
 function liveCalc(cs){
   const emp=employees.find(e=>e.cs===cs);if(!emp)return;
